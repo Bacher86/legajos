@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Legajos escolares</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-app-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-auth-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-firestore-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #faf9f6;
+    color: #1f2a2e;
+  }
+  h1, h2, h3 { font-family: Georgia, "Times New Roman", serif; font-weight: normal; margin: 0; }
+  #app { max-width: 720px; margin: 0 auto; min-height: 100vh; }
+  .topbar { background: #fff; border-bottom: 1px solid #ddd8cb; padding: 16px; }
+  .topbar h1 { font-size: 20px; }
+  .topbar p { font-size: 13px; color: #6b6b63; margin: 2px 0 0; }
+  .nav { display: flex; gap: 4px; flex-wrap: wrap; padding: 10px 16px; background: #fff; border-bottom: 1px solid #ddd8cb; }
+  .nav button {
+    border: 1px solid #ddd8cb; background: #fff; color: #4a4a44; font-size: 13px;
+    padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  }
+  .nav button.active { background: #1f2a2e; color: #fff; border-color: #1f2a2e; }
+  .content { padding: 16px; }
+  .card { background: #fff; border: 1px solid #ddd8cb; border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  label { display: block; font-size: 12px; color: #6b6b63; margin: 10px 0 4px; }
+  input, select { width: 100%; padding: 8px; border: 1px solid #cfc9ba; border-radius: 6px; font-size: 14px; }
+  .btn { background: #2f6f4e; color: #fff; border: none; padding: 9px 16px; border-radius: 6px; font-size: 14px; cursor: pointer; margin-top: 12px; }
+  .btn:hover { background: #235539; }
+  .btn.secondary { background: #fff; color: #4a4a44; border: 1px solid #cfc9ba; }
+  .btn.secondary:hover { background: #f4f2ec; }
+  .btn.danger { background: #fff; color: #b23a2e; border: 1px solid #e5b7b0; }
+  .error { color: #b23a2e; font-size: 13px; margin-top: 8px; }
+  .muted { color: #6b6b63; font-size: 13px; }
+  .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 4px; margin: 2px 4px 0 0; }
+  .badge.mod { background: #e8f2ea; color: #1f4f36; border: 1px solid #bcdbc4; }
+  .badge.niv { background: #fbeedd; color: #7a4c14; border: 1px solid #f0cd9c; }
+  .checkline { display: flex; align-items: center; gap: 8px; font-size: 14px; margin: 6px 0; }
+  .checkline input { width: auto; }
+  .row { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .link { color: #2f6f4e; background: none; border: none; text-decoration: underline; cursor: pointer; font-size: 13px; padding: 0; }
+  .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #eee; }
+  .center { text-align: center; padding: 40px 16px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyDnnZL6Zv3_xbDSPF-sOXX90JRzDZNWJ5w",
+  authDomain: "legajos-3fad9.firebaseapp.com",
+  projectId: "legajos-3fad9",
+  storageBucket: "legajos-3fad9.firebasestorage.app",
+  messagingSenderId: "307038926913",
+  appId: "1:307038926913:web:666e5f96e1951151bdaec0"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+const MODULOS = [
+  { key: "alumnos", label: "Legajo de alumnos" },
+  { key: "asistencia", label: "Asistencia diaria" },
+  { key: "admisiones", label: "Admisiones" },
+  { key: "notas", label: "Notas y boletines" },
+  { key: "estadisticas", label: "Estadísticas" },
+  { key: "configuracion", label: "Configuración" },
+];
+const NIVELES = [
+  { key: "inicial", label: "Inicial" },
+  { key: "primario", label: "Primario" },
+  { key: "secundario", label: "Secundario" },
+];
+
+let state = {
+  loading: true,
+  user: null,
+  perfil: null,
+  adminExiste: false,
+  vista: "alumnos",
+  authScreen: "login",
+};
+
+const app = document.getElementById("app");
+
+function esc(s) { const d = document.createElement("div"); d.innerText = s || ""; return d.innerHTML; }
+
+function edadDesde(fecha) {
+  if (!fecha) return null;
+  const nac = new Date(fecha);
+  const hoy = new Date();
+  let edad = hoy.getFullYear() - nac.getFullYear();
+  const m = hoy.getMonth() - nac.getMonth();
+  if (m < 0 || (m === 0 && hoy.getDate() < nac.getDate())) edad--;
+  return edad;
+}
+
+async function registrarAuditoria(accion, detalle) {
+  try {
+    await db.collection("auditoria").add({
+      accion, detalle,
+      uid: state.user ? state.user.uid : "desconocido",
+      nombre: state.perfil ? state.perfil.nombre : "desconocido",
+      fecha: new Date().toISOString(),
+    });
+  } catch (e) { /* no bloqueamos la acción principal si falla el log */ }
+}
+
+async function checkAdminExiste() {
+  try {
+    const snap = await db.collection("usuarios").where("role", "==", "admin").limit(1).get();
+    state.adminExiste = !snap.empty;
+  } catch (e) {
+    state.adminExiste = false;
+  }
+}
+
+auth.onAuthStateChanged(async (user) => {
+  state.user = user;
+  if (user) {
+    try {
+      const doc = await db.collection("usuarios").doc(user.uid).get();
+      state.perfil = doc.exists ? doc.data() : null;
+    } catch (e) {
+      state.perfil = null;
+    }
+  } else {
+    state.perfil = null;
+    await checkAdminExiste();
+  }
+  state.loading = false;
+  render();
+});
+
+function render() {
+  app.innerHTML = "";
+  if (state.loading) {
+    app.innerHTML = '<div class="center muted">Cargando…</div>';
+    return;
+  }
+  if (!state.user) {
+    renderAuth();
+    return;
+  }
+  if (!state.perfil) {
+    renderPendiente();
+    return;
+  }
+  renderApp();
+}
+
+function renderAuth() {
+  const wrap = document.createElement("div");
+  wrap.className = "content";
+
+  const header = document.createElement("div");
+  header.className = "topbar";
+  header.innerHTML = '<h1>Legajos escolares</h1><p>Acceso al sistema</p>';
+  app.appendChild(header);
+
+  if (!state.adminExiste) {
+    wrap.innerHTML = `
+      <div class="card">
+        <h3>Configuración inicial</h3>
+        <p class="muted">Todavía no hay ningún administrador. Creá la primera cuenta.</p>
+        <label>Nombre</label><input id="f-nombre" />
+        <label>Email</label><input id="f-email" type="email" />
+        <label>Contraseña</label><input id="f-pass" type="password" />
+        <button class="btn" id="btn-setup">Crear administrador</button>
+        <div class="error" id="err"></div>
+      </div>`;
+    app.appendChild(wrap);
+    document.getElementById("btn-setup").onclick = crearAdminInicial;
+    return;
+  }
+
+  if (state.authScreen === "login") {
+    wrap.innerHTML = `
+      <div class="card">
+        <h3>Iniciar sesión</h3>
+        <label>Email</label><input id="f-email" type="email" />
+        <label>Contraseña</label><input id="f-pass" type="password" />
+        <button class="btn" id="btn-login">Entrar</button>
+        <div class="error" id="err"></div>
+        <p class="muted" style="margin-top:14px">¿Tenés una invitación? <button class="link" id="ir-registro">Registrate acá</button></p>
+      </div>`;
+    app.appendChild(wrap);
+    document.getElementById("btn-login").onclick = login;
+    document.getElementById("ir-registro").onclick = () => { state.authScreen = "registro"; render(); };
+  } else {
+    wrap.innerHTML = `
+      <div class="card">
+        <h3>Registrarme</h3>
+        <p class="muted">Usá el mismo email al que el administrador te invitó.</p>
+        <label>Nombre</label><input id="f-nombre" />
+        <label>Email</label><input id="f-email" type="email" />
+        <label>Contraseña</label><input id="f-pass" type="password" />
+        <button class="btn" id="btn-registro">Crear mi cuenta</button>
+        <div class="error" id="err"></div>
+        <p class="muted" style="margin-top:14px"><button class="link" id="ir-login">Ya tengo cuenta, iniciar sesión</button></p>
+      </div>`;
+    app.appendChild(wrap);
+    document.getElementById("btn-registro").onclick = registrarseConInvitacion;
+    document.getElementById("ir-login").onclick = () => { state.authScreen = "login"; render(); };
+  }
+}
+
+async function crearAdminInicial() {
+  const nombre = document.getElementById("f-nombre").value.trim();
+  const email = document.getElementById("f-email").value.trim();
+  const pass = document.getElementById("f-pass").value;
+  const err = document.getElementById("err");
+  if (!nombre || !email || !pass) { err.innerText = "Completá todos los campos."; return; }
+  try {
+    const cred = await auth.createUserWithEmailAndPassword(email, pass);
+    await db.collection("usuarios").doc(cred.user.uid).set({
+      nombre, email, role: "admin",
+      modulos: { alumnos: true, admisiones: true, estadisticas: true, configuracion: true },
+      niveles: { inicial: true, primario: true, secundario: true },
+    });
+  } catch (e) {
+    err.innerText = e.message;
+  }
+}
+
+async function login() {
+  const email = document.getElementById("f-email").value.trim();
+  const pass = document.getElementById("f-pass").value;
+  const err = document.getElementById("err");
+  try {
+    await auth.signInWithEmailAndPassword(email, pass);
+  } catch (e) {
+    err.innerText = "Email o contraseña incorrectos.";
+  }
+}
+
+async function registrarseConInvitacion() {
+  const nombre = document.getElementById("f-nombre").value.trim();
+  const email = document.getElementById("f-email").value.trim();
+  const pass = document.getElementById("f-pass").value;
+  const err = document.getElementById("err");
+  if (!nombre || !email || !pass) { err.innerText = "Completá todos los campos."; return; }
+  const emailKey = email.toLowerCase();
+  let cred;
+  try {
+    cred = await auth.createUserWithEmailAndPassword(email, pass);
+  } catch (e) {
+    err.innerText = e.message;
+    return;
+  }
+  try {
+    const inv = await db.collection("invitaciones").doc(emailKey).get();
+    if (!inv.exists) {
+      err.innerText = "Ese email no tiene una invitación activa. Pedile al administrador que te invite primero.";
+      await cred.user.delete();
+      return;
+    }
+    const datos = inv.data();
+    await db.collection("usuarios").doc(cred.user.uid).set({
+      nombre, email, role: "user",
+      modulos: datos.modulos, niveles: datos.niveles,
+      asignacionesNotas: datos.asignacionesNotas || [],
+    });
+    await db.collection("invitaciones").doc(emailKey).delete();
+  } catch (e) {
+    err.innerText = e.message;
+    try { await cred.user.delete(); } catch (e2) {}
+  }
+}
+
+function renderPendiente() {
+  app.innerHTML = `
+    <div class="topbar"><h1>Legajos escolares</h1></div>
+    <div class="content">
+      <div class="card center">
+        <p>Tu cuenta todavía no tiene permisos asignados.</p>
+        <p class="muted">Pedile al administrador que te invite con tu email.</p>
+        <button class="btn secondary" id="btn-salir">Cerrar sesión</button>
+      </div>
+    </div>`;
+  document.getElementById("btn-salir").onclick = () => auth.signOut();
+}
+
+function tieneModulo(m) { return state.perfil.role === "admin" || (state.perfil.modulos && state.perfil.modulos[m]); }
+
+function renderApp() {
+  const header = document.createElement("div");
+  header.className = "topbar";
+  header.innerHTML = `
+    <div class="row">
+      <div><h1>Legajos escolares</h1><p>Hola, ${esc(state.perfil.nombre)} ${state.perfil.role === "admin" ? "· admin" : ""}</p></div>
+      <button class="btn secondary" id="btn-salir" style="margin-top:0">Salir</button>
+    </div>`;
+  app.appendChild(header);
+  header.querySelector("#btn-salir").onclick = () => auth.signOut();
+
+  const nav = document.createElement("div");
+  nav.className = "nav";
+  const opciones = [];
+  if (tieneModulo("alumnos")) opciones.push(["alumnos", "Alumnos"]);
+  if (tieneModulo("asistencia")) opciones.push(["asistencia", "Asistencia"]);
+  if (tieneModulo("admisiones")) opciones.push(["admisiones", "Admisiones"]);
+  if (tieneModulo("notas")) opciones.push(["notas", "Notas"]);
+  if (state.perfil.role === "admin") opciones.push(["promocion", "Promoción"]);
+  if (state.perfil.role === "admin") opciones.push(["usuarios", "Usuarios"]);
+  if (state.perfil.role === "admin") opciones.push(["auditoria", "Auditoría"]);
+  opciones.forEach(([key, label]) => {
+    const b = document.createElement("button");
+    b.innerText = label;
+    b.className = state.vista === key ? "active" : "";
+    b.onclick = () => { state.vista = key; render(); };
+    nav.appendChild(b);
+  });
+  app.appendChild(nav);
+
+  const content = document.createElement("div");
+  content.className = "content";
+  app.appendChild(content);
+
+  if (state.vista === "alumnos") renderAlumnos(content);
+  else if (state.vista === "asistencia") renderAsistencia(content);
+  else if (state.vista === "admisiones") renderAdmisiones(content);
+  else if (state.vista === "notas") renderNotas(content);
+  else if (state.vista === "promocion") renderPromocion(content);
+  else if (state.vista === "usuarios") renderUsuarios(content);
+  else if (state.vista === "auditoria") renderAuditoria(content);
+}
+
+async function renderAlumnos(content) {
+  content.innerHTML = '<div class="muted">Cargando alumnos…</div>';
+  let snap;
+  try {
+    snap = await db.collection("alumnos").get();
+  } catch (e) {
+    content.innerHTML = '<div class="card error">No se pudo leer la base. Revisá las reglas de Firestore.</div>';
+    return;
+  }
+  const nivelesPermitidos = state.perfil.role === "admin"
+    ? NIVELES.map((n) => n.key)
+    : NIVELES.filter((n) => state.perfil.niveles && state.perfil.niveles[n.key]).map((n) => n.key);
+
+  const todos = [];
+  snap.forEach((d) => todos.push({ id: d.id, ...d.data() }));
+  const visibles = todos.filter((a) => nivelesPermitidos.includes(a.nivel));
+
+  content.innerHTML = `
+    <div class="card">
+      <h3>Nuevo alumno</h3>
+      <label>Nombre completo</label><input id="a-nombre" />
+      <label>DNI</label><input id="a-dni" />
+      <label>Fecha de nacimiento</label><input id="a-fecha" type="date" />
+      <label>Nivel</label>
+      <select id="a-nivel">
+        ${NIVELES.filter((n) => nivelesPermitidos.includes(n.key)).map((n) => `<option value="${n.key}">${n.label}</option>`).join("")}
+      </select>
+      <label>Sección</label><input id="a-seccion" placeholder="A, B…" />
+      <label>Barrio</label><input id="a-barrio" />
+      <label>ID de familia (para vincular hermanos)</label><input id="a-familia" placeholder="opcional" />
+      <button class="btn" id="btn-crear">Guardar alumno</button>
+      <div class="error" id="a-err"></div>
+    </div>
+    <div class="card">
+      <h3>Buscar</h3>
+      <div class="filters">
+        <div>
+          <label>Nivel</label>
+          <select id="f-nivel"><option value="">Todos</option>${NIVELES.filter((n) => nivelesPermitidos.includes(n.key)).map((n) => `<option value="${n.key}">${n.label}</option>`).join("")}</select>
+        </div>
+        <div><label>Barrio</label><input id="f-barrio" /></div>
+        <div><label>Edad mín.</label><input id="f-edadmin" type="number" /></div>
+        <div><label>Edad máx.</label><input id="f-edadmax" type="number" /></div>
+      </div>
+      <button class="btn secondary" id="btn-exportar" style="margin-right:6px">Exportar a Excel</button>
+      <label style="display:inline-block; margin:12px 0 0">Importar desde Excel</label>
+      <input type="file" id="input-importar" accept=".xlsx,.xls,.csv" />
+      <div class="muted" id="importar-estado" style="margin-top:6px"></div>
+    </div>
+    <div class="card" id="lista"></div>
+  `;
+
+  const DOCS_REQUERIDOS = [
+    { key: "dni", label: "DNI" },
+    { key: "partida", label: "Partida de nacimiento" },
+    { key: "certificadoMedico", label: "Certificado médico" },
+    { key: "vacunas", label: "Certificado de vacunación" },
+    { key: "cuil", label: "Constancia de CUIL" },
+    { key: "foto", label: "Foto carnet" },
+  ];
+  const TIPOS_INCIDENCIA = ["Llamado de atención", "Acta", "Reunión con la familia", "Otro"];
+
+  function pintarLista() {
+    const nivelF = document.getElementById("f-nivel").value;
+    const barrioF = document.getElementById("f-barrio").value.trim().toLowerCase();
+    const edadMin = document.getElementById("f-edadmin").value;
+    const edadMax = document.getElementById("f-edadmax").value;
+
+    const filtrados = visibles.filter((a) => {
+      if (nivelF && a.nivel !== nivelF) return false;
+      if (barrioF && !(a.barrio || "").toLowerCase().includes(barrioF)) return false;
+      const edad = edadDesde(a.fechaNacimiento);
+      if (edadMin && (edad === null || edad < Number(edadMin))) return false;
+      if (edadMax && (edad === null || edad > Number(edadMax))) return false;
+      return true;
+    });
+
+    const lista = document.getElementById("lista");
+    if (filtrados.length === 0) {
+      lista.innerHTML = '<p class="muted">No hay alumnos que coincidan.</p>';
+      return;
+    }
+
+    lista.innerHTML = filtrados.map((a) => {
+      const doc = a.documentacion || {};
+      const faltantes = DOCS_REQUERIDOS.filter((d) => !doc[d.key]).length;
+      return `
+      <details data-id="${a.id}" style="margin-bottom:8px">
+        <summary style="cursor:pointer">
+          <strong>${esc(a.nombre)}</strong> · ${esc(a.nivel)} · ${edadDesde(a.fechaNacimiento) ?? "-"} años
+          ${faltantes > 0 ? `<span class="badge niv">${faltantes} doc. faltante(s)</span>` : `<span class="badge mod">Documentación completa</span>`}
+        </summary>
+        <div style="margin-top:10px">
+          <p class="muted">Barrio: ${esc(a.barrio || "-")} · Familia: ${esc(a.familiaId || "-")}</p>
+
+          <label>Documentación entregada</label>
+          ${DOCS_REQUERIDOS.map((d) => `<label class="checkline"><input type="checkbox" class="chk-doc" data-doc="${d.key}" ${doc[d.key] ? "checked" : ""} /> ${d.label}</label>`).join("")}
+
+          <label style="margin-top:14px">Incidencias / disciplina</label>
+          <div class="muted" style="font-size:12px; margin-bottom:6px">
+            ${(a.incidencias || []).slice().reverse().map((i) => `${esc(i.fecha)} — <strong>${esc(i.tipo)}</strong>: ${esc(i.descripcion)}`).join("<br>") || "Sin incidencias registradas."}
+          </div>
+          <select class="in-inc-tipo">${TIPOS_INCIDENCIA.map((t) => `<option>${t}</option>`).join("")}</select>
+          <input class="in-inc-desc" placeholder="Descripción breve" style="width:100%; margin-top:6px" />
+          <button class="btn secondary btn-add-inc" style="margin-top:6px">Registrar incidencia</button>
+        </div>
+      </details>`;
+    }).join("");
+
+    lista.querySelectorAll("details").forEach((det) => {
+      const id = det.dataset.id;
+      const alumno = filtrados.find((x) => x.id === id);
+
+      det.querySelectorAll(".chk-doc").forEach((chk) => {
+        chk.addEventListener("change", async () => {
+          const nuevaDoc = { ...(alumno.documentacion || {}), [chk.dataset.doc]: chk.checked };
+          await db.collection("alumnos").doc(id).update({ documentacion: nuevaDoc });
+          await registrarAuditoria("Documentación actualizada", `${alumno.nombre}: ${chk.dataset.doc} = ${chk.checked ? "entregado" : "pendiente"}`);
+          alumno.documentacion = nuevaDoc;
+        });
+      });
+
+      det.querySelector(".btn-add-inc").onclick = async () => {
+        const tipo = det.querySelector(".in-inc-tipo").value;
+        const descripcion = det.querySelector(".in-inc-desc").value.trim();
+        if (!descripcion) return;
+        const incidencias = [...(alumno.incidencias || []), { tipo, descripcion, fecha: new Date().toLocaleDateString("es-AR") }];
+        await db.collection("alumnos").doc(id).update({ incidencias });
+        await registrarAuditoria("Incidencia registrada", `${alumno.nombre}: ${tipo}`);
+        pintarLista();
+      };
+    });
+  }
+  pintarLista();
+  ["f-nivel", "f-barrio", "f-edadmin", "f-edadmax"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", pintarLista);
+  });
+
+  document.getElementById("btn-exportar").onclick = () => {
+    const filas = visibles.map((a) => ({
+      Nombre: a.nombre, DNI: a.dni || "", FechaNacimiento: a.fechaNacimiento || "",
+      Nivel: a.nivel || "", Seccion: a.seccion || "", Barrio: a.barrio || "",
+      FamiliaId: a.familiaId || "", Estado: a.estado || "activo",
+    }));
+    const ws = XLSX.utils.json_to_sheet(filas);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Alumnos");
+    XLSX.writeFile(wb, "alumnos.xlsx");
+  };
+
+  document.getElementById("input-importar").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const estado = document.getElementById("importar-estado");
+    estado.innerText = "Leyendo archivo…";
+    const buffer = await file.arrayBuffer();
+    const wb = XLSX.read(buffer, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const filas = XLSX.utils.sheet_to_json(ws);
+
+    const nivelesValidos = NIVELES.map((n) => n.key);
+    const errores = [];
+    const validas = [];
+    filas.forEach((f, i) => {
+      const nombre = (f.Nombre || f.nombre || "").toString().trim();
+      const nivel = (f.Nivel || f.nivel || "").toString().trim().toLowerCase();
+      if (!nombre) { errores.push(`Fila ${i + 2}: falta el nombre.`); return; }
+      if (!nivelesValidos.includes(nivel)) { errores.push(`Fila ${i + 2}: nivel "${nivel}" no es válido (usar inicial/primario/secundario).`); return; }
+      if (!nivelesPermitidos.includes(nivel)) { errores.push(`Fila ${i + 2}: no tenés permiso para cargar en el nivel "${nivel}".`); return; }
+      validas.push({
+        nombre, nivel,
+        dni: (f.DNI || f.dni || "").toString(),
+        fechaNacimiento: (f.FechaNacimiento || f.fechaNacimiento || "").toString(),
+        seccion: (f.Seccion || f.seccion || "").toString(),
+        barrio: (f.Barrio || f.barrio || "").toString(),
+        familiaId: (f.FamiliaId || f.familiaId || "").toString(),
+        estado: (f.Estado || f.estado || "activo").toString(),
+        creadoEn: new Date().toISOString(),
+      });
+    });
+
+    if (errores.length > 0) {
+      estado.innerHTML = `<span style="color:#b23a2e">Se encontraron ${errores.length} error(es), no se importó nada todavía:</span><br>${errores.slice(0, 10).join("<br>")}${errores.length > 10 ? "<br>…" : ""}`;
+      return;
+    }
+
+    estado.innerText = `Importando ${validas.length} alumnos…`;
+    try {
+      const batchSize = 400;
+      for (let i = 0; i < validas.length; i += batchSize) {
+        const lote = validas.slice(i, i + batchSize);
+        const batch = db.batch();
+        lote.forEach((v) => batch.set(db.collection("alumnos").doc(), v));
+        await batch.commit();
+      }
+      estado.innerText = `Se importaron ${validas.length} alumnos correctamente.`;
+      renderAlumnos(content);
+    } catch (err) {
+      estado.innerText = "Error al importar: " + err.message;
+    }
+  });
+
+  document.getElementById("btn-crear").onclick = async () => {
+    const nombre = document.getElementById("a-nombre").value.trim();
+    const err = document.getElementById("a-err");
+    if (!nombre) { err.innerText = "Ingresá el nombre."; return; }
+    try {
+      await db.collection("alumnos").add({
+        nombre,
+        dni: document.getElementById("a-dni").value.trim(),
+        fechaNacimiento: document.getElementById("a-fecha").value,
+        nivel: document.getElementById("a-nivel").value,
+        seccion: document.getElementById("a-seccion").value.trim(),
+        barrio: document.getElementById("a-barrio").value.trim(),
+        familiaId: document.getElementById("a-familia").value.trim(),
+        estado: "activo",
+        documentacion: {},
+        incidencias: [],
+        creadoEn: new Date().toISOString(),
+      });
+      await registrarAuditoria("Alta de alumno", nombre);
+      renderAlumnos(content);
+    } catch (e) {
+      err.innerText = "No se pudo guardar: " + e.message;
+    }
+  };
+}
+
+const MOTIVOS_NO_ADMISION = ["Vacantes completas", "No se presentó", "Decisión de la familia", "No cumple requisitos", "Otro"];
+
+const ESTADOS_ASISTENCIA = { presente: "Presente", ausente: "Ausente", tardanza: "Tardanza", justificada: "Ausente justificada" };
+
+async function renderAsistencia(content) {
+  content.innerHTML = '<div class="muted">Cargando…</div>';
+  const nivelesPermitidos = state.perfil.role === "admin"
+    ? NIVELES.map((n) => n.key)
+    : NIVELES.filter((n) => state.perfil.niveles && state.perfil.niveles[n.key]).map((n) => n.key);
+
+  const hoy = new Date().toISOString().slice(0, 10);
+
+  content.innerHTML = `
+    <div class="card">
+      <h3>Tomar asistencia</h3>
+      <label>Fecha</label><input id="a-fecha" type="date" value="${hoy}" />
+      <label>Nivel</label>
+      <select id="a-nivel"><option value="">Elegí un nivel</option>${NIVELES.filter((n) => nivelesPermitidos.includes(n.key)).map((n) => `<option value="${n.key}">${n.label}</option>`).join("")}</select>
+      <label>Sección (opcional, dejalo vacío para ver todas)</label><input id="a-seccion" />
+      <div id="a-tabla" style="margin-top:12px"></div>
+    </div>
+    <div class="card">
+      <h3>Historial de un alumno</h3>
+      <label>Buscar alumno por nombre</label>
+      <input id="h-buscar" placeholder="Escribí para buscar…" />
+      <div id="h-resultado" class="muted" style="margin-top:8px"></div>
+    </div>
+  `;
+
+  async function cargarTabla() {
+    const fecha = document.getElementById("a-fecha").value;
+    const nivel = document.getElementById("a-nivel").value;
+    const seccion = document.getElementById("a-seccion").value.trim().toLowerCase();
+    const tabla = document.getElementById("a-tabla");
+    if (!fecha || !nivel) { tabla.innerHTML = ""; return; }
+    tabla.innerHTML = '<p class="muted">Cargando alumnos…</p>';
+
+    const snap = await db.collection("alumnos").where("nivel", "==", nivel).where("estado", "==", "activo").get();
+    let alumnos = [];
+    snap.forEach((d) => alumnos.push({ id: d.id, ...d.data() }));
+    if (seccion) alumnos = alumnos.filter((a) => (a.seccion || "").toLowerCase() === seccion);
+    if (alumnos.length === 0) { tabla.innerHTML = '<p class="muted">No hay alumnos para esa selección.</p>'; return; }
+
+    const idsAsistencia = alumnos.map((a) => `${fecha}_${a.id}`);
+    const existentes = {};
+    for (const id of idsAsistencia) {
+      const doc = await db.collection("asistencias").doc(id).get();
+      if (doc.exists) existentes[id] = doc.data();
+    }
+
+    tabla.innerHTML = `
+      <table>
+        <tr><th>Alumno</th><th>Estado</th><th>Motivo (si justificada)</th></tr>
+        ${alumnos.map((a) => {
+          const clave = `${fecha}_${a.id}`;
+          const actual = existentes[clave];
+          return `<tr data-alumno="${a.id}">
+            <td>${esc(a.nombre)}</td>
+            <td><select class="sel-est">
+              ${Object.entries(ESTADOS_ASISTENCIA).map(([k, v]) => `<option value="${k}" ${(!actual && k === "presente") || (actual && actual.estado === k) ? "selected" : ""}>${v}</option>`).join("")}
+            </select></td>
+            <td><input class="in-motivo" style="width:100%" value="${esc(actual && actual.motivo ? actual.motivo : "")}" /></td>
+          </tr>`;
+        }).join("")}
+      </table>
+      <button class="btn" id="btn-guardar-asistencia" style="margin-top:10px">Guardar asistencia del día</button>
+      <div class="error" id="a-err"></div>
+    `;
+
+    document.getElementById("btn-guardar-asistencia").onclick = async () => {
+      const err = document.getElementById("a-err");
+      err.style.color = "#6b6b63";
+      err.innerText = "Guardando…";
+      try {
+        const batch = db.batch();
+        tabla.querySelectorAll("tr[data-alumno]").forEach((fila) => {
+          const alumnoId = fila.dataset.alumno;
+          const estado = fila.querySelector(".sel-est").value;
+          const motivo = fila.querySelector(".in-motivo").value.trim();
+          const ref = db.collection("asistencias").doc(`${fecha}_${alumnoId}`);
+          batch.set(ref, {
+            alumnoId, fecha, nivel, estado, motivo: estado === "justificada" ? motivo : "",
+            registradoPor: state.user.uid, actualizadoEn: new Date().toISOString(),
+          });
+        });
+        await batch.commit();
+        err.style.color = "#2f6f4e";
+        err.innerText = "Asistencia guardada.";
+      } catch (e) {
+        err.style.color = "#b23a2e";
+        err.innerText = "No se pudo guardar: " + e.message;
+      }
+    };
+  }
+  document.getElementById("a-fecha").addEventListener("change", cargarTabla);
+  document.getElementById("a-nivel").addEventListener("change", cargarTabla);
+  document.getElementById("a-seccion").addEventListener("input", cargarTabla);
+
+  document.getElementById("h-buscar").addEventListener("input", async (e) => {
+    const texto = e.target.value.trim().toLowerCase();
+    const resultado = document.getElementById("h-resultado");
+    if (texto.length < 2) { resultado.innerHTML = ""; return; }
+    const snap = await db.collection("alumnos").get();
+    const coincidencias = [];
+    snap.forEach((d) => { const v = d.data(); if (nivelesPermitidos.includes(v.nivel) && v.nombre.toLowerCase().includes(texto)) coincidencias.push({ id: d.id, ...v }); });
+    if (coincidencias.length === 0) { resultado.innerHTML = "Sin resultados."; return; }
+    resultado.innerHTML = coincidencias.slice(0, 8).map((a) => `<button class="link" data-id="${a.id}" style="display:block; margin:4px 0">${esc(a.nombre)} · ${esc(a.nivel)}</button>`).join("");
+    resultado.querySelectorAll("button").forEach((b) => {
+      b.onclick = async () => {
+        resultado.innerHTML = '<span class="muted">Cargando historial…</span>';
+        const asisSnap = await db.collection("asistencias").where("alumnoId", "==", b.dataset.id).get();
+        const registros = [];
+        asisSnap.forEach((d) => registros.push(d.data()));
+        registros.sort((x, y) => (x.fecha < y.fecha ? 1 : -1));
+        const totales = { presente: 0, ausente: 0, tardanza: 0, justificada: 0 };
+        registros.forEach((r) => { if (totales[r.estado] !== undefined) totales[r.estado]++; });
+        resultado.innerHTML = `
+          <p><strong>Resumen:</strong> ${totales.ausente} ausentes · ${totales.tardanza} tardanzas · ${totales.justificada} justificadas</p>
+          <table><tr><th>Fecha</th><th>Estado</th><th>Motivo</th></tr>
+            ${registros.slice(0, 30).map((r) => `<tr><td>${esc(r.fecha)}</td><td>${ESTADOS_ASISTENCIA[r.estado] || r.estado}</td><td>${esc(r.motivo || "-")}</td></tr>`).join("")}
+          </table>`;
+      };
+    });
+  });
+}
+
+async function renderAdmisiones(content) {
+  content.innerHTML = '<div class="muted">Cargando…</div>';
+  const nivelesPermitidos = state.perfil.role === "admin"
+    ? NIVELES.map((n) => n.key)
+    : NIVELES.filter((n) => state.perfil.niveles && state.perfil.niveles[n.key]).map((n) => n.key);
+
+  const snap = await db.collection("aspirantes").get();
+  const todos = [];
+  snap.forEach((d) => todos.push({ id: d.id, ...d.data() }));
+  const visibles = todos.filter((a) => nivelesPermitidos.includes(a.nivel));
+
+  content.innerHTML = `
+    <div class="card">
+      <h3>Nuevo aspirante</h3>
+      <label>Nombre completo</label><input id="as-nombre" />
+      <label>Fecha de nacimiento</label><input id="as-fecha" type="date" />
+      <label>Nivel al que aspira</label>
+      <select id="as-nivel">${NIVELES.filter((n) => nivelesPermitidos.includes(n.key)).map((n) => `<option value="${n.key}">${n.label}</option>`).join("")}</select>
+      <label>Familia / contacto</label><input id="as-familia" placeholder="Nombre del adulto responsable" />
+      <label>Teléfono o email de contacto</label><input id="as-contacto" />
+      <button class="btn" id="btn-crear-aspirante">Guardar aspirante</button>
+      <div class="error" id="as-err"></div>
+    </div>
+    <div class="filters" style="margin-bottom:12px">
+      <div><label>Estado</label>
+        <select id="f-estado-asp">
+          <option value="">Todos</option>
+          <option value="en_evaluacion">En evaluación</option>
+          <option value="entrevista_pendiente">Entrevista pendiente</option>
+          <option value="entrevista_realizada">Entrevista realizada</option>
+          <option value="en_espera">En espera</option>
+          <option value="admitido">Admitido</option>
+          <option value="no_admitido">No admitido</option>
+        </select>
+      </div>
+      <div><label>Nivel</label>
+        <select id="f-nivel-asp"><option value="">Todos</option>${NIVELES.filter((n) => nivelesPermitidos.includes(n.key)).map((n) => `<option value="${n.key}">${n.label}</option>`).join("")}</select>
+      </div>
+    </div>
+    <div id="lista-aspirantes"></div>
+  `;
+
+  document.getElementById("btn-crear-aspirante").onclick = async () => {
+    const nombre = document.getElementById("as-nombre").value.trim();
+    const err = document.getElementById("as-err");
+    if (!nombre) { err.innerText = "Ingresá el nombre."; return; }
+    try {
+      await db.collection("aspirantes").add({
+        nombre,
+        fechaNacimiento: document.getElementById("as-fecha").value,
+        nivel: document.getElementById("as-nivel").value,
+        familia: document.getElementById("as-familia").value.trim(),
+        contacto: document.getElementById("as-contacto").value.trim(),
+        estado: "en_evaluacion",
+        mensajes: [],
+        entrevistas: [],
+        creadoEn: new Date().toISOString(),
+      });
+      renderAdmisiones(content);
+    } catch (e) {
+      err.innerText = "No se pudo guardar: " + e.message;
+    }
+  };
+
+  function pintar() {
+    const fEstado = document.getElementById("f-estado-asp").value;
+    const fNivel = document.getElementById("f-nivel-asp").value;
+    const filtrados = visibles.filter((a) => (!fEstado || a.estado === fEstado) && (!fNivel || a.nivel === fNivel));
+    const cont = document.getElementById("lista-aspirantes");
+    if (filtrados.length === 0) { cont.innerHTML = '<p class="muted">No hay aspirantes que coincidan.</p>'; return; }
+
+    const ESTADOS = {
+      en_evaluacion: "En evaluación", entrevista_pendiente: "Entrevista pendiente",
+      entrevista_realizada: "Entrevista realizada", en_espera: "En espera",
+      admitido: "Admitido", no_admitido: "No admitido",
+    };
+
+    cont.innerHTML = filtrados.map((a) => `
+      <div class="card" data-id="${a.id}">
+        <div class="row">
+          <div><strong>${esc(a.nombre)}</strong><br><span class="muted">${esc(a.nivel)} · ${esc(a.familia || "sin contacto")}</span></div>
+          <span class="badge niv">${ESTADOS[a.estado] || a.estado}</span>
+        </div>
+        <details style="margin-top:8px">
+          <summary class="link" style="cursor:pointer">Ver detalle y acciones</summary>
+          <div style="margin-top:10px">
+            <label>Mensajes / consultas</label>
+            <div class="muted" style="font-size:12px; margin-bottom:6px">
+              ${(a.mensajes || []).map((m) => `${esc(m.fecha)}: ${esc(m.texto)}`).join("<br>") || "Sin registros todavía."}
+            </div>
+            <input class="in-mensaje" placeholder="Nueva consulta o contacto…" style="width:70%; display:inline-block" />
+            <button class="btn secondary btn-add-mensaje" style="margin-top:0">Registrar</button>
+
+            <label style="margin-top:14px">Entrevistas</label>
+            <div class="muted" style="font-size:12px; margin-bottom:6px">
+              ${(a.entrevistas || []).map((e) => `${esc(e.fecha)} — ${esc(e.responsable)}: ${esc(e.notas || "sin notas")}`).join("<br>") || "Sin entrevistas registradas."}
+            </div>
+            <input class="in-entrevista-fecha" type="date" style="width:150px; display:inline-block" />
+            <input class="in-entrevista-resp" placeholder="Responsable" style="width:calc(50% - 8px); display:inline-block" />
+            <input class="in-entrevista-notas" placeholder="Notas de la entrevista" style="width:100%; margin-top:6px" />
+            <button class="btn secondary btn-add-entrevista" style="margin-top:6px">Registrar entrevista</button>
+
+            <label style="margin-top:14px">Cambiar estado</label>
+            <select class="sel-estado">
+              ${Object.entries(ESTADOS).map(([k, v]) => `<option value="${k}" ${a.estado === k ? "selected" : ""}>${v}</option>`).join("")}
+            </select>
+            <div class="bloque-motivo" style="display:${a.estado === "no_admitido" ? "block" : "none"}">
+              <label>Motivo de no admisión</label>
+              <select class="sel-motivo">${MOTIVOS_NO_ADMISION.map((m) => `<option ${a.motivoNoAdmision === m ? "selected" : ""}>${m}</option>`).join("")}</select>
+            </div>
+            <button class="btn btn-guardar-estado" style="margin-top:8px">Guardar estado</button>
+            ${a.estado === "admitido" ? `<button class="btn btn-convertir" style="background:#1f4f36">Convertir en alumno activo</button>` : ""}
+          </div>
+        </details>
+      </div>
+    `).join("");
+
+    cont.querySelectorAll(".card").forEach((card) => {
+      const id = card.dataset.id;
+      const aspirante = visibles.find((x) => x.id === id);
+
+      card.querySelector(".sel-estado").addEventListener("change", (e) => {
+        card.querySelector(".bloque-motivo").style.display = e.target.value === "no_admitido" ? "block" : "none";
+      });
+
+      card.querySelector(".btn-add-mensaje").onclick = async () => {
+        const texto = card.querySelector(".in-mensaje").value.trim();
+        if (!texto) return;
+        const mensajes = [...(aspirante.mensajes || []), { texto, fecha: new Date().toLocaleDateString("es-AR") }];
+        await db.collection("aspirantes").doc(id).update({ mensajes });
+        renderAdmisiones(content);
+      };
+
+      card.querySelector(".btn-add-entrevista").onclick = async () => {
+        const fecha = card.querySelector(".in-entrevista-fecha").value;
+        const responsable = card.querySelector(".in-entrevista-resp").value.trim();
+        const notas = card.querySelector(".in-entrevista-notas").value.trim();
+        if (!fecha || !responsable) return;
+        const entrevistas = [...(aspirante.entrevistas || []), { fecha, responsable, notas }];
+        await db.collection("aspirantes").doc(id).update({ entrevistas, estado: aspirante.estado === "entrevista_pendiente" ? "entrevista_realizada" : aspirante.estado });
+        renderAdmisiones(content);
+      };
+
+      card.querySelector(".btn-guardar-estado").onclick = async () => {
+        const nuevoEstado = card.querySelector(".sel-estado").value;
+        const datos = { estado: nuevoEstado };
+        if (nuevoEstado === "no_admitido") datos.motivoNoAdmision = card.querySelector(".sel-motivo").value;
+        await db.collection("aspirantes").doc(id).update(datos);
+        await registrarAuditoria("Cambio de estado de aspirante", `${aspirante.nombre} → ${nuevoEstado}`);
+        renderAdmisiones(content);
+      };
+
+      const btnConvertir = card.querySelector(".btn-convertir");
+      if (btnConvertir) {
+        btnConvertir.onclick = async () => {
+          await db.collection("alumnos").add({
+            nombre: aspirante.nombre, dni: "", fechaNacimiento: aspirante.fechaNacimiento || "",
+            nivel: aspirante.nivel, seccion: "", barrio: "", familiaId: "",
+            estado: "activo", documentacion: {}, incidencias: [], creadoEn: new Date().toISOString(), origenAspiranteId: id,
+          });
+          await db.collection("aspirantes").doc(id).update({ estado: "admitido", convertido: true });
+          await registrarAuditoria("Aspirante convertido en alumno", aspirante.nombre);
+          renderAdmisiones(content);
+        };
+      }
+    });
+  }
+  pintar();
+  document.getElementById("f-estado-asp").addEventListener("change", pintar);
+  document.getElementById("f-nivel-asp").addEventListener("change", pintar);
+}
+
+async function renderNotas(content) {
+  content.innerHTML = '<div class="muted">Cargando…</div>';
+  const esAdmin = state.perfil.role === "admin";
+  const asignaciones = state.perfil.asignacionesNotas || [];
+
+  const [alumnosSnap, materiasSnap] = await Promise.all([
+    db.collection("alumnos").get(),
+    db.collection("materias").get(),
+  ]);
+  const materias = [];
+  materiasSnap.forEach((d) => materias.push({ id: d.id, ...d.data() }));
+
+  // Materias que este usuario puede calificar (todas si es admin)
+  const materiasPermitidasIds = esAdmin ? materias.map((m) => m.id) : asignaciones.map((a) => a.materiaId);
+  const nivelesConAcceso = esAdmin
+    ? NIVELES.map((n) => n.key)
+    : [...new Set(materias.filter((m) => materiasPermitidasIds.includes(m.id)).map((m) => m.nivel))];
+
+  function seccionPermitida(nivel, seccion) {
+    if (esAdmin) return true;
+    return asignaciones.some((a) => {
+      const materia = materias.find((m) => m.id === a.materiaId);
+      if (!materia || materia.nivel !== nivel) return false;
+      return a.seccion === "todas" || (a.seccion || "").toLowerCase() === (seccion || "").toLowerCase();
+    });
+  }
+
+  const alumnos = [];
+  alumnosSnap.forEach((d) => {
+    const v = d.data();
+    if (nivelesConAcceso.includes(v.nivel) && seccionPermitida(v.nivel, v.seccion)) alumnos.push({ id: d.id, ...v });
+  });
+
+  content.innerHTML = `
+    ${esAdmin ? `
+    <div class="card">
+      <h3>Materias</h3>
+      <label>Nombre de la materia</label><input id="m-nombre" placeholder="Matemática" />
+      <label>Nivel</label>
+      <select id="m-nivel">${NIVELES.map((n) => `<option value="${n.key}">${n.label}</option>`).join("")}</select>
+      <label>Modalidad de calificación</label>
+      <select id="m-modalidad">
+        <option value="numerica">Numérica (0 a 10)</option>
+        <option value="indicadores">Indicadores bimestrales (Logrado / En proceso / No logrado)</option>
+      </select>
+      <button class="btn" id="btn-materia">Agregar materia</button>
+      <div class="error" id="m-err"></div>
+      <div style="margin-top:10px">${materias.map((m) => `<span class="badge mod">${esc(m.nombre)} · ${esc(m.nivel)} · ${m.modalidad === "indicadores" ? "indicadores" : "numérica"}</span>`).join("") || '<span class="muted">Todavía no hay materias cargadas.</span>'}</div>
+    </div>` : ""}
+    <div class="card">
+      <h3>Cargar notas / ver boletín</h3>
+      <label>Alumno</label>
+      <select id="n-alumno">
+        <option value="">Seleccioná un alumno</option>
+        ${alumnos.map((a) => `<option value="${a.id}" data-nivel="${a.nivel}">${esc(a.nombre)} · ${esc(a.nivel)}</option>`).join("")}
+      </select>
+    </div>
+    <div id="boletin"></div>
+  `;
+
+  if (state.perfil.role === "admin") {
+    document.getElementById("btn-materia").onclick = async () => {
+      const nombre = document.getElementById("m-nombre").value.trim();
+      const nivel = document.getElementById("m-nivel").value;
+      const err = document.getElementById("m-err");
+      if (!nombre) { err.innerText = "Ingresá el nombre de la materia."; return; }
+      try {
+        await db.collection("materias").add({ nombre, nivel, modalidad: document.getElementById("m-modalidad").value });
+        renderNotas(content);
+      } catch (e) {
+        err.innerText = "No se pudo guardar: " + e.message;
+      }
+    };
+  }
+
+  document.getElementById("n-alumno").addEventListener("change", async (e) => {
+    const alumnoId = e.target.value;
+    const boletin = document.getElementById("boletin");
+    if (!alumnoId) { boletin.innerHTML = ""; return; }
+    const alumno = alumnos.find((a) => a.id === alumnoId);
+    const materiasNivel = materias.filter((m) => m.nivel === alumno.nivel && materiasPermitidasIds.includes(m.id));
+    if (materiasNivel.length === 0) {
+      boletin.innerHTML = '<div class="card muted">No tenés materias asignadas para este alumno.</div>';
+      return;
+    }
+    boletin.innerHTML = '<div class="card muted">Cargando notas…</div>';
+    const notasSnap = await db.collection("notas").where("alumnoId", "==", alumnoId).get();
+    const notas = {};
+    notasSnap.forEach((d) => { const v = d.data(); notas[v.materiaId + "-" + v.periodo] = { id: d.id, nota: v.nota }; });
+
+    const INDICADORES = ["", "Logrado", "En proceso", "No logrado"];
+    const periodos = ["1", "2", "3"];
+    boletin.innerHTML = `
+      <div class="card">
+        <h3>Boletín · ${esc(alumno.nombre)}</h3>
+        <table>
+          <tr><th>Materia</th>${periodos.map((p) => `<th>Trim. ${p}</th>`).join("")}</tr>
+          ${materiasNivel.map((m) => `
+            <tr>
+              <td>${esc(m.nombre)}</td>
+              ${periodos.map((p) => {
+                const existente = notas[m.id + "-" + p];
+                const valor = existente ? existente.nota : "";
+                if (m.modalidad === "indicadores") {
+                  return `<td><select data-materia="${m.id}" data-periodo="${p}" style="width:120px">
+                    ${INDICADORES.map((op) => `<option value="${op}" ${op === valor ? "selected" : ""}>${op || "—"}</option>`).join("")}
+                  </select></td>`;
+                }
+                return `<td><input type="number" min="0" max="10" style="width:56px" data-materia="${m.id}" data-periodo="${p}" value="${valor}" /></td>`;
+              }).join("")}
+            </tr>`).join("")}
+        </table>
+        <button class="btn" id="btn-guardar-notas">Guardar notas</button>
+        <button class="btn secondary" id="btn-pdf-boletin">Descargar PDF</button>
+        <div class="error" id="n-err"></div>
+      </div>`;
+
+    document.getElementById("btn-pdf-boletin").onclick = () => {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF();
+      doc.setFontSize(16);
+      doc.text("Boletín escolar", 14, 18);
+      doc.setFontSize(12);
+      doc.text(`Alumno: ${alumno.nombre}`, 14, 28);
+      doc.text(`Nivel: ${alumno.nivel}${alumno.seccion ? " · Sección " + alumno.seccion : ""}`, 14, 35);
+      let y = 48;
+      doc.setFontSize(11);
+      doc.text("Materia", 14, y);
+      periodos.forEach((p, i) => doc.text("Trim." + p, 110 + i * 25, y));
+      y += 6;
+      doc.line(14, y - 3, 196, y - 3);
+      materiasNivel.forEach((m) => {
+        doc.text(m.nombre, 14, y);
+        periodos.forEach((p, i) => {
+          const clave = m.id + "-" + p;
+          const valor = notas[clave] ? String(notas[clave].nota) : "-";
+          doc.text(valor, 110 + i * 25, y);
+        });
+        y += 8;
+      });
+      doc.save(`boletin_${alumno.nombre.replace(/\s+/g, "_")}.pdf`);
+    };
+
+    document.getElementById("btn-guardar-notas").onclick = async () => {
+      const err = document.getElementById("n-err");
+      const inputs = boletin.querySelectorAll("[data-materia]");
+      try {
+        for (const inp of inputs) {
+          if (inp.value === "") continue;
+          const materiaId = inp.dataset.materia;
+          const periodo = inp.dataset.periodo;
+          const clave = materiaId + "-" + periodo;
+          const nota = inp.tagName === "SELECT" ? inp.value : Number(inp.value);
+          if (notas[clave]) {
+            await db.collection("notas").doc(notas[clave].id).update({ nota, actualizadoEn: new Date().toISOString() });
+          } else {
+            await db.collection("notas").add({ alumnoId, materiaId, periodo, nota, cargadoPor: state.user.uid, fecha: new Date().toISOString() });
+          }
+        }
+        err.style.color = "#2f6f4e";
+        err.innerText = "Notas guardadas.";
+      } catch (e) {
+        err.style.color = "#b23a2e";
+        err.innerText = "No se pudo guardar: " + e.message;
+      }
+    };
+  });
+}
+
+async function renderPromocion(content) {
+  content.innerHTML = '<div class="muted">Cargando…</div>';
+  const snap = await db.collection("alumnos").where("estado", "==", "activo").get();
+  const alumnos = [];
+  snap.forEach((d) => alumnos.push({ id: d.id, ...d.data() }));
+
+  content.innerHTML = `
+    <div class="card">
+      <h3>Promoción de ciclo lectivo</h3>
+      <p class="muted">Seleccioná el nivel de origen, revisá la lista y confirmá el pase al nivel destino. Queda registrado en el historial de cada alumno.</p>
+      <label>Nivel de origen</label>
+      <select id="p-origen"><option value="">Elegí un nivel</option>${NIVELES.map((n) => `<option value="${n.key}">${n.label}</option>`).join("")}</select>
+      <label>Nivel destino</label>
+      <select id="p-destino"><option value="">Elegí un nivel</option>${NIVELES.map((n) => `<option value="${n.key}">${n.label}</option>`).join("")}<option value="egresado">Egresado (fin de secundario)</option></select>
+      <div id="p-lista" style="margin-top:14px"></div>
+    </div>
+  `;
+
+  function pintarLista() {
+    const origen = document.getElementById("p-origen").value;
+    const cont = document.getElementById("p-lista");
+    if (!origen) { cont.innerHTML = ""; return; }
+    const delNivel = alumnos.filter((a) => a.nivel === origen);
+    if (delNivel.length === 0) {
+      cont.innerHTML = '<p class="muted">No hay alumnos activos en ese nivel.</p>';
+      return;
+    }
+    cont.innerHTML = `
+      <label class="checkline"><input type="checkbox" id="p-todos" checked /> Seleccionar todos (${delNivel.length})</label>
+      ${delNivel.map((a) => `<label class="checkline"><input type="checkbox" class="p-chk" value="${a.id}" checked /> ${esc(a.nombre)} ${a.seccion ? "· " + esc(a.seccion) : ""}</label>`).join("")}
+      <button class="btn" id="btn-promover" style="margin-top:10px">Confirmar pase de nivel</button>
+      <div class="error" id="p-err"></div>
+    `;
+    document.getElementById("p-todos").addEventListener("change", (e) => {
+      cont.querySelectorAll(".p-chk").forEach((c) => c.checked = e.target.checked);
+    });
+    document.getElementById("btn-promover").onclick = async () => {
+      const destino = document.getElementById("p-destino").value;
+      const err = document.getElementById("p-err");
+      if (!destino) { err.innerText = "Elegí el nivel destino."; return; }
+      const seleccionados = [...cont.querySelectorAll(".p-chk:checked")].map((c) => c.value);
+      if (seleccionados.length === 0) { err.innerText = "Seleccioná al menos un alumno."; return; }
+      err.innerText = "Aplicando pase…";
+      try {
+        const batch = db.batch();
+        seleccionados.forEach((id) => {
+          const alumno = alumnos.find((a) => a.id === id);
+          const historial = alumno.historialNiveles || [];
+          historial.push({ desde: alumno.nivel, hacia: destino, fecha: new Date().toISOString() });
+          const datos = destino === "egresado"
+            ? { estado: "egresado", historialNiveles: historial }
+            : { nivel: destino, historialNiveles: historial };
+          batch.update(db.collection("alumnos").doc(id), datos);
+        });
+        await batch.commit();
+        await registrarAuditoria("Promoción de ciclo lectivo", `${seleccionados.length} alumnos: ${origen} → ${destino}`);
+        err.style.color = "#2f6f4e";
+        err.innerText = `Se promovieron ${seleccionados.length} alumnos.`;
+        renderPromocion(content);
+      } catch (e) {
+        err.style.color = "#b23a2e";
+        err.innerText = "No se pudo aplicar: " + e.message;
+      }
+    };
+  }
+  document.getElementById("p-origen").addEventListener("change", pintarLista);
+  document.getElementById("p-destino").addEventListener("change", pintarLista);
+}
+
+async function renderAuditoria(content) {
+  content.innerHTML = '<div class="muted">Cargando…</div>';
+  const snap = await db.collection("auditoria").orderBy("fecha", "desc").limit(100).get();
+  const registros = [];
+  snap.forEach((d) => registros.push(d.data()));
+  content.innerHTML = `
+    <div class="card">
+      <h3>Registro de auditoría</h3>
+      <p class="muted">Últimas 100 acciones registradas en el sistema.</p>
+      <table>
+        <tr><th>Fecha</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr>
+        ${registros.map((r) => `<tr><td>${esc(new Date(r.fecha).toLocaleString("es-AR"))}</td><td>${esc(r.nombre)}</td><td>${esc(r.accion)}</td><td>${esc(r.detalle)}</td></tr>`).join("") || '<tr><td colspan="4" class="muted">Sin registros todavía.</td></tr>'}
+      </table>
+    </div>
+  `;
+}
+
+async function renderUsuarios(content) {
+  content.innerHTML = '<div class="muted">Cargando…</div>';
+  const [usuariosSnap, invitacionesSnap, materiasSnap] = await Promise.all([
+    db.collection("usuarios").get(),
+    db.collection("invitaciones").get(),
+    db.collection("materias").get(),
+  ]);
+  const materias = [];
+  materiasSnap.forEach((d) => materias.push({ id: d.id, ...d.data() }));
+
+  content.innerHTML = `
+    <div class="card">
+      <h3>Invitar usuario</h3>
+      <label>Nombre</label><input id="i-nombre" />
+      <label>Email</label><input id="i-email" type="email" />
+      <label>Plantilla de rol (opcional, precarga los permisos típicos)</label>
+      <select id="i-plantilla">
+        <option value="">Elegir manualmente</option>
+        <option value="preceptor">Preceptor</option>
+        <option value="docente">Docente</option>
+        <option value="secretaria">Secretaría</option>
+      </select>
+      <p class="muted" style="margin-top:12px">Qué puede ver y hacer</p>
+      ${MODULOS.map((m) => `<label class="checkline"><input type="checkbox" data-mod="${m.key}" id="mod-${m.key}" /> ${m.label}</label>`).join("")}
+      <p class="muted" style="margin-top:12px">Dónde (niveles) — aplica a Alumnos, Admisiones, etc.</p>
+      ${NIVELES.map((n) => `<label class="checkline"><input type="checkbox" data-niv="${n.key}" /> ${n.label}</label>`).join("")}
+
+      <div id="bloque-asignaciones" style="display:none; margin-top:14px; border-top:1px solid #eee; padding-top:12px">
+        <p class="muted">Materias y secciones que puede calificar (solo para "Notas y boletines")</p>
+        <div id="lista-asignaciones"></div>
+        <button type="button" class="btn secondary" id="btn-add-asignacion" style="margin-top:6px">+ Agregar materia/sección</button>
+        ${materias.length === 0 ? '<p class="error" style="margin-top:6px">Todavía no hay materias cargadas — creá materias primero desde la sección Notas.</p>' : ""}
+      </div>
+
+      <button class="btn" id="btn-invitar">Enviar invitación</button>
+      <div class="error" id="i-err"></div>
+    </div>
+    <div class="card">
+      <h3>Invitaciones pendientes</h3>
+      <div id="lista-inv"></div>
+    </div>
+    <div class="card">
+      <h3>Usuarios activos</h3>
+      <div id="lista-usr"></div>
+    </div>
+  `;
+
+  const bloqueAsig = document.getElementById("bloque-asignaciones");
+  const listaAsig = document.getElementById("lista-asignaciones");
+  document.getElementById("mod-notas").addEventListener("change", (e) => {
+    bloqueAsig.style.display = e.target.checked ? "block" : "none";
+  });
+
+  function agregarFilaAsignacion() {
+    const fila = document.createElement("div");
+    fila.style.display = "flex";
+    fila.style.gap = "6px";
+    fila.style.marginTop = "6px";
+    fila.innerHTML = `
+      <select class="asig-materia" style="flex:2">
+        ${materias.map((m) => `<option value="${m.id}">${esc(m.nombre)} · ${esc(m.nivel)}</option>`).join("")}
+      </select>
+      <input class="asig-seccion" placeholder="Sección (o 'todas')" style="flex:1" />
+      <button type="button" class="btn danger" style="margin-top:0">Quitar</button>
+    `;
+    fila.querySelector("button").onclick = () => fila.remove();
+    listaAsig.appendChild(fila);
+  }
+  document.getElementById("btn-add-asignacion").onclick = agregarFilaAsignacion;
+
+  const PLANTILLAS = {
+    preceptor: { modulos: ["alumnos", "asistencia"], niveles: [] },
+    docente: { modulos: ["notas"], niveles: [] },
+    secretaria: { modulos: ["alumnos", "admisiones", "asistencia"], niveles: [] },
+  };
+  document.getElementById("i-plantilla").addEventListener("change", (e) => {
+    document.querySelectorAll("[data-mod]").forEach((c) => c.checked = false);
+    document.querySelectorAll("[data-niv]").forEach((c) => c.checked = false);
+    const plantilla = PLANTILLAS[e.target.value];
+    if (plantilla) {
+      plantilla.modulos.forEach((m) => { document.getElementById("mod-" + m).checked = true; });
+      bloqueAsig.style.display = plantilla.modulos.includes("notas") ? "block" : "none";
+    }
+  });
+
+  const listaInv = document.getElementById("lista-inv");
+  if (invitacionesSnap.empty) {
+    listaInv.innerHTML = '<p class="muted">No hay invitaciones pendientes.</p>';
+  } else {
+    invitacionesSnap.forEach((d) => {
+      const v = d.data();
+      const div = document.createElement("div");
+      div.className = "card";
+      div.style.marginBottom = "8px";
+      div.innerHTML = `<div class="row"><div><strong>${esc(v.nombre)}</strong><br><span class="muted">${esc(d.id)}</span></div>
+        <button class="btn danger" style="margin-top:0">Cancelar</button></div>
+        <div>${MODULOS.filter((m) => v.modulos && v.modulos[m.key]).map((m) => `<span class="badge mod">${m.label}</span>`).join("")}</div>
+        <div>${NIVELES.filter((n) => v.niveles && v.niveles[n.key]).map((n) => `<span class="badge niv">${n.label}</span>`).join("")}</div>
+        ${(v.asignacionesNotas || []).length > 0 ? `<div>${v.asignacionesNotas.map((a) => {
+          const mat = materias.find((m) => m.id === a.materiaId);
+          return `<span class="badge niv">${mat ? esc(mat.nombre) : "?"} · ${esc(a.seccion)}</span>`;
+        }).join("")}</div>` : ""}`;
+      div.querySelector("button").onclick = async () => {
+        await db.collection("invitaciones").doc(d.id).delete();
+        renderUsuarios(content);
+      };
+      listaInv.appendChild(div);
+    });
+  }
+
+  const listaUsr = document.getElementById("lista-usr");
+  usuariosSnap.forEach((d) => {
+    const v = d.data();
+    const div = document.createElement("div");
+    div.className = "card";
+    div.style.marginBottom = "8px";
+    div.innerHTML = `<strong>${esc(v.nombre)}</strong> ${v.role === "admin" ? "· admin" : ""}<br><span class="muted">${esc(v.email)}</span>
+      <div>${MODULOS.filter((m) => v.modulos && v.modulos[m.key]).map((m) => `<span class="badge mod">${m.label}</span>`).join("")}</div>
+      <div>${NIVELES.filter((n) => v.niveles && v.niveles[n.key]).map((n) => `<span class="badge niv">${n.label}</span>`).join("")}</div>`;
+    listaUsr.appendChild(div);
+  });
+
+  document.getElementById("btn-invitar").onclick = async () => {
+    const nombre = document.getElementById("i-nombre").value.trim();
+    const email = document.getElementById("i-email").value.trim().toLowerCase();
+    const err = document.getElementById("i-err");
+    if (!nombre || !email) { err.innerText = "Completá nombre y email."; return; }
+    const modulos = {};
+    document.querySelectorAll("[data-mod]").forEach((c) => modulos[c.dataset.mod] = c.checked);
+    const niveles = {};
+    document.querySelectorAll("[data-niv]").forEach((c) => niveles[c.dataset.niv] = c.checked);
+    if (!Object.values(modulos).some(Boolean)) { err.innerText = "Asigná al menos un módulo."; return; }
+    const asignacionesNotas = [];
+    if (modulos.notas) {
+      listaAsig.querySelectorAll("div").forEach((fila) => {
+        const materiaId = fila.querySelector(".asig-materia")?.value;
+        const seccion = (fila.querySelector(".asig-seccion")?.value || "todas").trim();
+        if (materiaId) asignacionesNotas.push({ materiaId, seccion });
+      });
+    }
+    try {
+      await db.collection("invitaciones").doc(email).set({ nombre, modulos, niveles, asignacionesNotas, creadoEn: new Date().toISOString() });
+      await registrarAuditoria("Invitación enviada", `${nombre} <${email}>`);
+      renderUsuarios(content);
+    } catch (e) {
+      err.innerText = "No se pudo invitar: " + e.message;
+    }
+  };
+}
+
+render();
+</script>
+</body>
+</html>
