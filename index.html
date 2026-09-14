@@ -18,17 +18,23 @@
     color: #1f2a2e;
   }
   h1, h2, h3 { font-family: Georgia, "Times New Roman", serif; font-weight: normal; margin: 0; }
-  #app { max-width: 720px; margin: 0 auto; min-height: 100vh; }
+  #app { min-height: 100vh; }
+  .layout { display: flex; min-height: 100vh; }
+  .sidebar { width: 210px; background: #1f2a2e; color: #e8e6df; flex-shrink: 0; transition: width 0.15s ease; overflow: hidden; }
+  .sidebar.collapsed { width: 52px; }
+  .sidebar-header { display: flex; align-items: center; gap: 10px; padding: 14px; border-bottom: 1px solid #33413f; }
+  .sidebar-header .toggle-btn { background: none; border: none; color: #e8e6df; font-size: 18px; cursor: pointer; padding: 4px; flex-shrink: 0; }
+  .sidebar-title { font-family: Georgia, serif; font-size: 15px; white-space: nowrap; }
+  .nav-item { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; background: none; border: none; color: #cfcac0; padding: 11px 14px; font-size: 14px; cursor: pointer; white-space: nowrap; }
+  .nav-item:hover { background: #29383a; }
+  .nav-item.active { background: #2f6f4e; color: #fff; }
+  .nav-item .icon { font-size: 17px; width: 18px; text-align: center; flex-shrink: 0; }
+  .sidebar.collapsed .label, .sidebar.collapsed .sidebar-title { display: none; }
+  .main { flex: 1; min-width: 0; }
   .topbar { background: #fff; border-bottom: 1px solid #ddd8cb; padding: 16px; }
   .topbar h1 { font-size: 20px; }
   .topbar p { font-size: 13px; color: #6b6b63; margin: 2px 0 0; }
-  .nav { display: flex; gap: 4px; flex-wrap: wrap; padding: 10px 16px; background: #fff; border-bottom: 1px solid #ddd8cb; }
-  .nav button {
-    border: 1px solid #ddd8cb; background: #fff; color: #4a4a44; font-size: 13px;
-    padding: 6px 12px; border-radius: 6px; cursor: pointer;
-  }
-  .nav button.active { background: #1f2a2e; color: #fff; border-color: #1f2a2e; }
-  .content { padding: 16px; }
+  .content { padding: 16px; max-width: 720px; }
   .card { background: #fff; border: 1px solid #ddd8cb; border-radius: 10px; padding: 16px; margin-bottom: 12px; }
   label { display: block; font-size: 12px; color: #6b6b63; margin: 10px 0 4px; }
   input, select { width: 100%; padding: 8px; border: 1px solid #cfc9ba; border-radius: 6px; font-size: 14px; }
@@ -89,6 +95,7 @@ let state = {
   adminExiste: false,
   vista: "alumnos",
   authScreen: "login",
+  sidebarCollapsed: false,
 };
 
 const app = document.getElementById("app");
@@ -294,38 +301,64 @@ function renderPendiente() {
 function tieneModulo(m) { return state.perfil.role === "admin" || (state.perfil.modulos && state.perfil.modulos[m]); }
 
 function renderApp() {
-  const header = document.createElement("div");
-  header.className = "topbar";
-  header.innerHTML = `
-    <div class="row">
-      <div><h1>Legajos escolares</h1><p>Hola, ${esc(state.perfil.nombre)} ${state.perfil.role === "admin" ? "· admin" : ""}</p></div>
-      <button class="btn secondary" id="btn-salir" style="margin-top:0">Salir</button>
-    </div>`;
-  app.appendChild(header);
-  header.querySelector("#btn-salir").onclick = () => auth.signOut();
+  const layout = document.createElement("div");
+  layout.className = "layout";
 
-  const nav = document.createElement("div");
-  nav.className = "nav";
+  const sidebar = document.createElement("div");
+  sidebar.className = "sidebar" + (state.sidebarCollapsed ? " collapsed" : "");
+  sidebar.innerHTML = `
+    <div class="sidebar-header">
+      <button class="toggle-btn" id="btn-toggle">☰</button>
+      <span class="sidebar-title">Legajos</span>
+    </div>`;
+
   const opciones = [];
-  if (tieneModulo("alumnos")) opciones.push(["alumnos", "Alumnos"]);
-  if (tieneModulo("asistencia")) opciones.push(["asistencia", "Asistencia"]);
-  if (tieneModulo("admisiones")) opciones.push(["admisiones", "Admisiones"]);
-  if (tieneModulo("notas")) opciones.push(["notas", "Notas"]);
-  if (state.perfil.role === "admin") opciones.push(["promocion", "Promoción"]);
-  if (state.perfil.role === "admin") opciones.push(["usuarios", "Usuarios"]);
-  if (state.perfil.role === "admin") opciones.push(["auditoria", "Auditoría"]);
-  opciones.forEach(([key, label]) => {
+  if (tieneModulo("alumnos")) opciones.push(["alumnos", "Alumnos", "🎓"]);
+  if (tieneModulo("asistencia")) opciones.push(["asistencia", "Asistencia", "🗓️"]);
+  if (tieneModulo("admisiones")) opciones.push(["admisiones", "Admisiones", "📋"]);
+  if (tieneModulo("notas")) opciones.push(["notas", "Notas", "📝"]);
+  if (state.perfil.role === "admin") opciones.push(["promocion", "Promoción", "🔄"]);
+  if (state.perfil.role === "admin") opciones.push(["usuarios", "Usuarios", "👥"]);
+  if (state.perfil.role === "admin") opciones.push(["auditoria", "Auditoría", "🕵️"]);
+
+  opciones.forEach(([key, label, icon]) => {
     const b = document.createElement("button");
-    b.innerText = label;
-    b.className = state.vista === key ? "active" : "";
+    b.className = "nav-item" + (state.vista === key ? " active" : "");
+    b.title = label;
+    b.innerHTML = `<span class="icon">${icon}</span><span class="label">${label}</span>`;
     b.onclick = () => { state.vista = key; render(); };
-    nav.appendChild(b);
+    sidebar.appendChild(b);
   });
-  app.appendChild(nav);
+
+  const salir = document.createElement("button");
+  salir.className = "nav-item";
+  salir.title = "Salir";
+  salir.innerHTML = `<span class="icon">🚪</span><span class="label">Salir</span>`;
+  salir.onclick = () => auth.signOut();
+  sidebar.appendChild(salir);
+
+  layout.appendChild(sidebar);
+
+  const main = document.createElement("div");
+  main.className = "main";
+
+  const topbar = document.createElement("div");
+  topbar.className = "topbar";
+  topbar.innerHTML = `<h1>Legajos escolares</h1><p>Hola, ${esc(state.perfil.nombre)} ${state.perfil.role === "admin" ? "· admin" : ""}</p>`;
+  main.appendChild(topbar);
 
   const content = document.createElement("div");
   content.className = "content";
-  app.appendChild(content);
+  main.appendChild(content);
+  layout.appendChild(main);
+
+  app.innerHTML = "";
+  app.appendChild(layout);
+
+  document.getElementById("btn-toggle").onclick = () => {
+    state.sidebarCollapsed = !state.sidebarCollapsed;
+    render();
+  };
 
   if (state.vista === "alumnos") renderAlumnos(content);
   else if (state.vista === "asistencia") renderAsistencia(content);
@@ -342,7 +375,7 @@ async function renderAlumnos(content) {
   try {
     snap = await db.collection("alumnos").get();
   } catch (e) {
-    content.innerHTML = '<div class="card error">No se pudo leer la base. Revisá las reglas de Firestore.</div>';
+    content.innerHTML = `<div class="card error">No se pudo leer la base: ${esc(e.message)}</div>`;
     return;
   }
   const nivelesPermitidos = state.perfil.role === "admin"
@@ -696,7 +729,13 @@ async function renderAdmisiones(content) {
     ? NIVELES.map((n) => n.key)
     : NIVELES.filter((n) => state.perfil.niveles && state.perfil.niveles[n.key]).map((n) => n.key);
 
-  const snap = await db.collection("aspirantes").get();
+  let snap;
+  try {
+    snap = await db.collection("aspirantes").get();
+  } catch (e) {
+    content.innerHTML = `<div class="card error">No se pudo leer aspirantes: ${esc(e.message)}</div>`;
+    return;
+  }
   const todos = [];
   snap.forEach((d) => todos.push({ id: d.id, ...d.data() }));
   const visibles = todos.filter((a) => nivelesPermitidos.includes(a.nivel));
@@ -867,10 +906,16 @@ async function renderNotas(content) {
   const esAdmin = state.perfil.role === "admin";
   const asignaciones = state.perfil.asignacionesNotas || [];
 
-  const [alumnosSnap, materiasSnap] = await Promise.all([
-    db.collection("alumnos").get(),
-    db.collection("materias").get(),
-  ]);
+  let alumnosSnap, materiasSnap;
+  try {
+    [alumnosSnap, materiasSnap] = await Promise.all([
+      db.collection("alumnos").get(),
+      db.collection("materias").get(),
+    ]);
+  } catch (e) {
+    content.innerHTML = `<div class="card error">No se pudo cargar: ${esc(e.message)}</div>`;
+    return;
+  }
   const materias = [];
   materiasSnap.forEach((d) => materias.push({ id: d.id, ...d.data() }));
 
@@ -1033,7 +1078,13 @@ async function renderNotas(content) {
 
 async function renderPromocion(content) {
   content.innerHTML = '<div class="muted">Cargando…</div>';
-  const snap = await db.collection("alumnos").where("estado", "==", "activo").get();
+  let snap;
+  try {
+    snap = await db.collection("alumnos").where("estado", "==", "activo").get();
+  } catch (e) {
+    content.innerHTML = `<div class="card error">No se pudo cargar: ${esc(e.message)}</div>`;
+    return;
+  }
   const alumnos = [];
   snap.forEach((d) => alumnos.push({ id: d.id, ...d.data() }));
 
@@ -1102,7 +1153,13 @@ async function renderPromocion(content) {
 
 async function renderAuditoria(content) {
   content.innerHTML = '<div class="muted">Cargando…</div>';
-  const snap = await db.collection("auditoria").orderBy("fecha", "desc").limit(100).get();
+  let snap;
+  try {
+    snap = await db.collection("auditoria").orderBy("fecha", "desc").limit(100).get();
+  } catch (e) {
+    content.innerHTML = `<div class="card error">No se pudo cargar: ${esc(e.message)}</div>`;
+    return;
+  }
   const registros = [];
   snap.forEach((d) => registros.push(d.data()));
   content.innerHTML = `
@@ -1119,11 +1176,17 @@ async function renderAuditoria(content) {
 
 async function renderUsuarios(content) {
   content.innerHTML = '<div class="muted">Cargando…</div>';
-  const [usuariosSnap, invitacionesSnap, materiasSnap] = await Promise.all([
-    db.collection("usuarios").get(),
-    db.collection("invitaciones").get(),
-    db.collection("materias").get(),
-  ]);
+  let usuariosSnap, invitacionesSnap, materiasSnap;
+  try {
+    [usuariosSnap, invitacionesSnap, materiasSnap] = await Promise.all([
+      db.collection("usuarios").get(),
+      db.collection("invitaciones").get(),
+      db.collection("materias").get(),
+    ]);
+  } catch (e) {
+    content.innerHTML = `<div class="card"><p class="error">No se pudo cargar: ${esc(e.message)}</p><p class="muted">Esto suele pasar si las reglas de Firestore todavía no están publicadas, o si tu cuenta no tiene un documento en la colección "usuarios" con role "admin".</p></div>`;
+    return;
+  }
   const materias = [];
   materiasSnap.forEach((d) => materias.push({ id: d.id, ...d.data() }));
 
