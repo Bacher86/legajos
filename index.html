@@ -236,6 +236,12 @@ async function crearAdminInicial() {
       niveles: { inicial: true, primario: true, secundario: true },
     });
     await db.collection("configuracion").doc("estado").set({ adminCreado: true }, { merge: true });
+    state.perfil = {
+      nombre, email, role: "admin",
+      modulos: { alumnos: true, admisiones: true, asistencia: true, notas: true, estadisticas: true, configuracion: true },
+      niveles: { inicial: true, primario: true, secundario: true },
+    };
+    render();
   } catch (e) {
     err.innerText = e.message;
   }
@@ -280,6 +286,12 @@ async function registrarseConInvitacion() {
       asignacionesNotas: datos.asignacionesNotas || [],
     });
     await db.collection("invitaciones").doc(emailKey).delete();
+    state.perfil = {
+      nombre, email, role: "user",
+      modulos: datos.modulos, niveles: datos.niveles,
+      asignacionesNotas: datos.asignacionesNotas || [],
+    };
+    render();
   } catch (e) {
     err.innerText = e.message;
     try { await cred.user.delete(); } catch (e2) {}
@@ -292,11 +304,19 @@ function renderPendiente() {
     <div class="content">
       <div class="card center">
         <p>Tu cuenta todavía no tiene permisos asignados.</p>
-        <p class="muted">Pedile al administrador que te invite con tu email.</p>
+        <p class="muted">Pedile al administrador que te invite con tu email, o si ya te invitó, probá "Reintentar".</p>
+        <button class="btn" id="btn-reintentar">Reintentar</button>
         <button class="btn secondary" id="btn-salir">Cerrar sesión</button>
       </div>
     </div>`;
   document.getElementById("btn-salir").onclick = () => auth.signOut();
+  document.getElementById("btn-reintentar").onclick = async () => {
+    try {
+      const doc = await db.collection("usuarios").doc(state.user.uid).get();
+      state.perfil = doc.exists ? doc.data() : null;
+    } catch (e) { state.perfil = null; }
+    render();
+  };
 }
 
 function tieneModulo(m) { return state.perfil.role === "admin" || (state.perfil.modulos && state.perfil.modulos[m]); }
