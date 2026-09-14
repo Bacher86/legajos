@@ -338,6 +338,7 @@ function renderApp() {
   if (tieneModulo("asistencia")) opciones.push(["asistencia", "Asistencia", "🗓️"]);
   if (tieneModulo("admisiones")) opciones.push(["admisiones", "Admisiones", "📋"]);
   if (tieneModulo("notas")) opciones.push(["notas", "Notas", "📝"]);
+  opciones.push(["disponibilidad", "Mi disponibilidad", "⏰"]);
   if (state.perfil.role === "admin") opciones.push(["promocion", "Promoción", "🔄"]);
   if (state.perfil.role === "admin") opciones.push(["usuarios", "Usuarios", "👥"]);
   if (state.perfil.role === "admin") opciones.push(["auditoria", "Auditoría", "🕵️"]);
@@ -385,6 +386,7 @@ function renderApp() {
   else if (state.vista === "asistencia") renderAsistencia(content);
   else if (state.vista === "admisiones") renderAdmisiones(content);
   else if (state.vista === "notas") renderNotas(content);
+  else if (state.vista === "disponibilidad") renderDisponibilidad(content);
   else if (state.vista === "promocion") renderPromocion(content);
   else if (state.vista === "usuarios") renderUsuarios(content);
   else if (state.vista === "auditoria") renderAuditoria(content);
@@ -744,6 +746,78 @@ async function renderAsistencia(content) {
   });
 }
 
+async function renderDisponibilidad(content) {
+  content.innerHTML = '<div class="muted">Cargando…</div>';
+  let snap;
+  try {
+    snap = await db.collection("disponibilidad").where("uid", "==", state.user.uid).get();
+  } catch (e) {
+    content.innerHTML = `<div class="card error">No se pudo cargar: ${esc(e.message)}</div>`;
+    return;
+  }
+  let slots = [];
+  snap.forEach((d) => slots.push({ id: d.id, ...d.data() }));
+  slots.sort((a, b) => (a.fecha + a.horaInicio < b.fecha + b.horaInicio ? -1 : 1));
+
+  content.innerHTML = `
+    <div class="card">
+      <h3>Mi disponibilidad para entrevistas</h3>
+      <p class="muted">Cargá los horarios en los que podés recibir entrevistas de admisión. Quien coordina las entrevistas va a poder agendar directo en uno de estos turnos.</p>
+      <label>Fecha</label><input id="d-fecha" type="date" />
+      <label>Desde</label><input id="d-inicio" type="time" />
+      <label>Hasta</label><input id="d-fin" type="time" />
+      <button class="btn" id="btn-add-slot">Agregar horario</button>
+      <div class="error" id="d-err"></div>
+    </div>
+    <div class="card">
+      <h3>Mis horarios cargados</h3>
+      <div id="lista-slots"></div>
+    </div>
+  `;
+
+  function pintarSlots() {
+    const cont = document.getElementById("lista-slots");
+    if (slots.length === 0) { cont.innerHTML = '<p class="muted">Todavía no cargaste horarios.</p>'; return; }
+    cont.innerHTML = slots.map((s) => `
+      <div class="row" style="border-bottom:1px solid #eee; padding:6px 0">
+        <div>
+          <strong>${esc(s.fecha)} · ${esc(s.horaInicio)}–${esc(s.horaFin)}</strong><br>
+          ${s.ocupado ? `<span class="badge niv">Reservado: ${esc(s.aspiranteNombre || "aspirante")}</span>` : `<span class="badge mod">Libre</span>`}
+        </div>
+        ${!s.ocupado ? `<button class="btn danger btn-del-slot" data-id="${s.id}" style="margin-top:0">Quitar</button>` : ""}
+      </div>`).join("");
+    cont.querySelectorAll(".btn-del-slot").forEach((b) => {
+      b.onclick = async () => {
+        await db.collection("disponibilidad").doc(b.dataset.id).delete();
+        slots = slots.filter((s) => s.id !== b.dataset.id);
+        pintarSlots();
+      };
+    });
+  }
+  pintarSlots();
+
+  document.getElementById("btn-add-slot").onclick = async () => {
+    const fecha = document.getElementById("d-fecha").value;
+    const horaInicio = document.getElementById("d-inicio").value;
+    const horaFin = document.getElementById("d-fin").value;
+    const err = document.getElementById("d-err");
+    if (!fecha || !horaInicio || !horaFin) { err.innerText = "Completá fecha, desde y hasta."; return; }
+    try {
+      const ref = await db.collection("disponibilidad").add({
+        uid: state.user.uid, nombre: state.perfil.nombre,
+        fecha, horaInicio, horaFin, ocupado: false, aspiranteId: null, aspiranteNombre: null,
+        creadoEn: new Date().toISOString(),
+      });
+      slots.push({ id: ref.id, uid: state.user.uid, nombre: state.perfil.nombre, fecha, horaInicio, horaFin, ocupado: false });
+      slots.sort((a, b) => (a.fecha + a.horaInicio < b.fecha + b.horaInicio ? -1 : 1));
+      pintarSlots();
+      err.innerText = "";
+    } catch (e) {
+      err.innerText = "No se pudo guardar: " + e.message;
+    }
+  };
+}
+
 async function renderAdmisiones(content) {
   content.innerHTML = '<div class="muted">Cargando…</div>';
   const nivelesPermitidos = state.perfil.role === "admin"
@@ -760,6 +834,14 @@ async function renderAdmisiones(content) {
   const todos = [];
   snap.forEach((d) => todos.push({ id: d.id, ...d.data() }));
   const visibles = todos.filter((a) => nivelesPermitidos.includes(a.nivel));
+
+  let slotsLibres = [];
+  try {
+    const dispSnap = await db.collection("disponibilidad").where("ocupado", "==", false).get();
+    dispSnap.forEach((d) => slotsLibres.push({ id: d.id, ...d.data() }));
+    slotsLibres.sort((a, b) => (a.fecha + a.horaInicio < b.fecha + b.horaInicio ? -1 : 1));
+  } catch (e) { /* si falla, simplemente no se ofrece agendar por calendario */ }
+  const directoresConTurnos = [...new Set(slotsLibres.map((s) => s.nombre))];
 
   content.innerHTML = `
     <div class="card">
@@ -845,8 +927,18 @@ async function renderAdmisiones(content) {
 
             <label style="margin-top:14px">Entrevistas</label>
             <div class="muted" style="font-size:12px; margin-bottom:6px">
-              ${(a.entrevistas || []).map((e) => `${esc(e.fecha)} — ${esc(e.responsable)}: ${esc(e.notas || "sin notas")}`).join("<br>") || "Sin entrevistas registradas."}
+              ${(a.entrevistas || []).map((e) => `${esc(e.fecha)}${e.hora ? " " + esc(e.hora) : ""} — ${esc(e.responsable)}: ${esc(e.notas || (e.estado === "agendada" ? "turno agendado, falta la entrevista" : "sin notas"))}`).join("<br>") || "Sin entrevistas registradas."}
             </div>
+
+            <p class="muted" style="margin-top:10px; margin-bottom:2px">Agendar por calendario</p>
+            <select class="sel-director">
+              <option value="">Elegí un director/área</option>
+              ${directoresConTurnos.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}
+            </select>
+            <div class="sel-slots muted" style="font-size:12px; margin-top:6px">${directoresConTurnos.length === 0 ? "Todavía nadie cargó horarios disponibles (sección 'Mi disponibilidad')." : "Elegí un director para ver sus horarios libres."}</div>
+            <button class="btn secondary btn-agendar" style="margin-top:6px" disabled>Confirmar turno</button>
+
+            <p class="muted" style="margin-top:14px; margin-bottom:2px">O registrar una entrevista manual (sin calendario)</p>
             <input class="in-entrevista-fecha" type="date" style="width:150px; display:inline-block" />
             <input class="in-entrevista-resp" placeholder="Responsable" style="width:calc(50% - 8px); display:inline-block" />
             <input class="in-entrevista-notas" placeholder="Notas de la entrevista" style="width:100%; margin-top:6px" />
@@ -881,6 +973,38 @@ async function renderAdmisiones(content) {
         const mensajes = [...(aspirante.mensajes || []), { texto, fecha: new Date().toLocaleDateString("es-AR") }];
         await db.collection("aspirantes").doc(id).update({ mensajes });
         renderAdmisiones(content);
+      };
+
+      let slotElegido = null;
+      const selDirector = card.querySelector(".sel-director");
+      const slotsDiv = card.querySelector(".sel-slots");
+      const btnAgendar = card.querySelector(".btn-agendar");
+      selDirector.addEventListener("change", () => {
+        slotElegido = null;
+        btnAgendar.disabled = true;
+        const nombreDir = selDirector.value;
+        const disponibles = slotsLibres.filter((s) => s.nombre === nombreDir);
+        if (!nombreDir) { slotsDiv.innerText = "Elegí un director para ver sus horarios libres."; return; }
+        if (disponibles.length === 0) { slotsDiv.innerText = "Ese director no tiene horarios libres cargados."; return; }
+        slotsDiv.innerHTML = disponibles.map((s) => `<label class="checkline"><input type="radio" name="slot-${id}" value="${s.id}" /> ${esc(s.fecha)} · ${esc(s.horaInicio)}–${esc(s.horaFin)}</label>`).join("");
+        slotsDiv.querySelectorAll("input[type=radio]").forEach((r) => {
+          r.addEventListener("change", () => {
+            slotElegido = disponibles.find((x) => x.id === r.value);
+            btnAgendar.disabled = false;
+          });
+        });
+      });
+      btnAgendar.onclick = async () => {
+        if (!slotElegido) return;
+        try {
+          await db.collection("disponibilidad").doc(slotElegido.id).update({ ocupado: true, aspiranteId: id, aspiranteNombre: aspirante.nombre });
+          const entrevistas = [...(aspirante.entrevistas || []), { fecha: slotElegido.fecha, hora: `${slotElegido.horaInicio}–${slotElegido.horaFin}`, responsable: slotElegido.nombre, notas: "", estado: "agendada" }];
+          await db.collection("aspirantes").doc(id).update({ entrevistas, estado: "entrevista_pendiente" });
+          await registrarAuditoria("Entrevista agendada", `${aspirante.nombre} con ${slotElegido.nombre} el ${slotElegido.fecha}`);
+          renderAdmisiones(content);
+        } catch (e) {
+          slotsDiv.innerHTML = `<span style="color:#b23a2e">No se pudo agendar: ${esc(e.message)}</span>`;
+        }
       };
 
       card.querySelector(".btn-add-entrevista").onclick = async () => {
