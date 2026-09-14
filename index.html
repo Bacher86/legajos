@@ -125,8 +125,8 @@ async function registrarAuditoria(accion, detalle) {
 
 async function checkAdminExiste() {
   try {
-    const snap = await db.collection("usuarios").where("role", "==", "admin").limit(1).get();
-    state.adminExiste = !snap.empty;
+    const doc = await db.collection("configuracion").doc("estado").get();
+    state.adminExiste = doc.exists && doc.data().adminCreado === true;
   } catch (e) {
     state.adminExiste = false;
   }
@@ -232,9 +232,10 @@ async function crearAdminInicial() {
     const cred = await auth.createUserWithEmailAndPassword(email, pass);
     await db.collection("usuarios").doc(cred.user.uid).set({
       nombre, email, role: "admin",
-      modulos: { alumnos: true, admisiones: true, estadisticas: true, configuracion: true },
+      modulos: { alumnos: true, admisiones: true, asistencia: true, notas: true, estadisticas: true, configuracion: true },
       niveles: { inicial: true, primario: true, secundario: true },
     });
+    await db.collection("configuracion").doc("estado").set({ adminCreado: true }, { merge: true });
   } catch (e) {
     err.innerText = e.message;
   }
